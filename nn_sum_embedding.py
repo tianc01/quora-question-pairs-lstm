@@ -85,12 +85,11 @@ def multilayer_perceptron(X, weights, biases):
     out_layer = tf.matmul(layer_3, weights['out']) + biases['out']
     return out_layer
 
-def prepare_data():
+def prepare_data(data_size):
     print("Loading data...")
     data = pd.read_csv('data/questions.csv').dropna()
 
-    num_slice = 400
-    data = data.loc[:num_slice-1, :]
+    data = data.loc[:data_size-1, :]
     print("data.shape: ", data.shape)
 
     # Split to train, dev and test pandas dataframe
@@ -115,7 +114,8 @@ def prepare_data():
 
 if __name__ == "__main__":
 
-    train_X, train_y, dev_X, dev_y, test_X, test_y = prepare_data()
+    data_size = 8000
+    train_X, train_y, dev_X, dev_y, test_X, test_y = prepare_data(data_size)
     # Hyper-parameters we will not tune
     dim_input = train_X.shape[1]
     dim_output = 2

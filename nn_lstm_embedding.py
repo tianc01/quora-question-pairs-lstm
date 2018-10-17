@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import pickle
 import sklearn.metrics
+import sklearn.preprocessing
 from preprocess import PreprocessData
 from pdb import set_trace as st
 
@@ -22,7 +23,7 @@ def lower_mapping(S,weights,biases):
     # Additional tanh layer to map 200d to 100d
     lS = tf.add(tf.matmul(S, weights['lower']), biases['lower'])
     lS = tf.layers.batch_normalization(lS)
-    lS = tf.nn.relu(lS)
+    lS = tf.nn.tanh(lS)
     lS = tf.nn.dropout(lS, keep_prob)
     return lS
 
@@ -51,17 +52,6 @@ def multilayer_perceptron(X, weights, biases):
     out_layer = tf.matmul(layer_3, weights['out']) + biases['out']
     return out_layer
 
-def shuffle_train(data):
-    data_index = data.index.tolist()
-    np.random.shuffle(data_index)
-    shuffled_data = data.loc[data_index]
-    x1 = np.array(shuffled_data['q1w_embed_pad'].tolist())
-    x2 = np.array(shuffled_data['q2w_embed_pad'].tolist())
-    label = np.array(shuffled_data['is_duplicate'].tolist())
-    y = np.zeros((label.shape[0], n_labels))
-    y[np.arange(label.shape[0]), label] = 1
-    return x1,x2,y
-
 def df_splitter(df, seed = 2010, train_prop = 0.7, dev_prop = 0.15):
     """Splits the dataframe to three dataframes."""
     df_index = df.index.tolist()
@@ -84,7 +74,23 @@ def get_x_y(data):
     x1 = np.array(data['q1w_embed_pad'].tolist())
     x2 = np.array(data['q2w_embed_pad'].tolist())
     y = np.array(data['is_duplicate'].tolist())
+    
     return x1,x2,y
+
+def standardize(train_X, dev_X, test_X):
+    trainX_reshaped = np.reshape(train_X, (train_X.shape[0], train_X.shape[1]*train_X.shape[2]))
+    mean_trainX = np.mean(trainX_reshaped, axis = 0)
+    std_trainX = np.std(trainX_reshaped, axis = 0)
+    norm_train_X = (trainX_reshaped - mean_trainX)/std_trainX
+    train_X = np.reshape(norm_train_X, (train_X.shape[0], train_X.shape[1], train_X.shape[2]))
+
+    devX_reshaped = np.reshape(dev_X, (dev_X.shape[0], dev_X.shape[1]*dev_X.shape[2]))
+    testX_reshaped = np.reshape(test_X, (test_X.shape[0], test_X.shape[1]*test_X.shape[2]))
+    norm_dev_X = (devX_reshaped - mean_trainX)/std_trainX
+    norm_test_X = (testX_reshaped - mean_trainX)/std_trainX
+    dev_X = np.reshape(norm_dev_X, (dev_X.shape[0], dev_X.shape[1], dev_X.shape[2]))
+    test_X = np.reshape(norm_test_X, (test_X.shape[0], test_X.shape[1], test_X.shape[2]))
+    return train_X, dev_X, test_X
 
 def balance_model(df,seed = 0):
     data_one = df.loc[df['is_duplicate'] == 1]
@@ -124,6 +130,10 @@ def prepare_data(data_size, max_len_1, max_len_2, preprocess, balance_data):
     dev_X1,dev_X2,dev_label = get_x_y(dev)
     test_X1,test_X2,test_label = get_x_y(test)
 
+    # Normalize x1, x2
+    train_X1,dev_X1,test_X1 = standardize(train_X1,dev_X1,test_X1)
+    train_X2,dev_X2,test_X2 = standardize(train_X2,dev_X2,test_X2)
+
     print('train non-duplicate prop:', 1-np.mean(train_label))
     print('dev non-duplicate prop:', 1-np.mean(dev_label))
     print('test non-duplicate prop:', 1-np.mean(test_label))
@@ -142,10 +152,10 @@ def prepare_data(data_size, max_len_1, max_len_2, preprocess, balance_data):
 if __name__ == "__main__":
     data_size = 8000
     max_len_1 = 28
-    max_len_2 =31
+    max_len_2 = 31
 
     data_padded, train, train_X1,train_X2,train_y,dev_X1,dev_X2,dev_y,test_X1,test_X2,test_y = \
-    prepare_data(data_size, max_len_1, max_len_2, preprocess = False, balance_data = False)
+    prepare_data(data_size, max_len_1, max_len_2, preprocess = True, balance_data = False)
 
     # Hyper-parameters we will not tune
     n_labels = 2
@@ -159,13 +169,13 @@ if __name__ == "__main__":
     dim_hidden_3 = 200
 
     # Hyper-parameters we will tune
-    learning_rate = 0.01
+    learning_rate = 0.001
     stop = learning_rate*0.01 # stop = 1e-7
     keep_prob_value = 0.5
     lstm_keep_prob = 1.0
     beta = 0.01 # L2 regularization
     batch_size = 128
-    epoch = 100
+    epoch = 500
 
     tf.reset_default_graph()
 
@@ -214,7 +224,6 @@ if __name__ == "__main__":
         regularizer += beta*tf.nn.l2_loss(biases[key])
      
     # Define loss and optimizer
-
     cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=yp, labels=y))+regularizer
     # cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=yp, labels=y)+regularizer)
     # cost = -tf.reduce_sum(y * tf.log(tf.clip_by_value(yp,1e-10,1.0)))+regularizer
@@ -227,7 +236,6 @@ if __name__ == "__main__":
     # tf.cast: change logical value to float
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-
     # Execute the graph
     # Initialization
     sess = tf.Session()
@@ -239,42 +247,30 @@ if __name__ == "__main__":
     train_acc = [None]*epoch
     dev_acc = [None]*epoch
     test_acc = [None]*epoch
+
     for i in range(epoch):
         avg_cost_by_epoch[i] = 0.
         for j in range(num_batches):
             idx = 0
-            # shuffle data
-            new_train_X1, new_train_X2, new_train_y = shuffle_train(train)
-            batch_X1 = new_train_X1[idx:idx+batch_size]
-            batch_X2 = new_train_X2[idx:idx+batch_size]
-            batch_y = new_train_y[idx:idx+batch_size]
+            batch_X1 = train_X1[idx:idx+batch_size]
+            batch_X2 = train_X2[idx:idx+batch_size]
+            batch_y = train_y[idx:idx+batch_size]
+
             idx += batch_size
             _, c = sess.run([optimizer, cost],feed_dict={X1: batch_X1, X2: batch_X2, y: batch_y, keep_prob: keep_prob_value})
             # Compute average loss
             avg_cost_by_epoch[i] += c / num_batches
-        train_acc[i] = sess.run(accuracy,feed_dict={X1: train_X1, X2: train_X2, y: train_y, keep_prob: 1.0})
-        dev_acc[i] = sess.run(accuracy,feed_dict={X1: dev_X1, X2: dev_X2, y: dev_y, keep_prob: 1.0})
-        test_acc[i] = sess.run(accuracy,feed_dict={X1: test_X1, X2: test_X2, y: test_y, keep_prob: 1.0})
+        # train_acc[i] = sess.run(accuracy,feed_dict={X1: train_X1, X2: train_X2, y: train_y, keep_prob: 1.0})
+        # dev_acc[i] = sess.run(accuracy,feed_dict={X1: dev_X1, X2: dev_X2, y: dev_y, keep_prob: 1.0})
+        # test_acc[i] = sess.run(accuracy,feed_dict={X1: test_X1, X2: test_X2, y: test_y, keep_prob: 1.0})
         
         if i % display_step == 0:
-            print("Epoch:", '%04d' % (i+1), "cost=", "{:.9f}".format(avg_cost_by_epoch[i]), "train acc=",                     "{:.9f}".format(train_acc[i]), "dev acc=",                     "{:.9f}".format(dev_acc[i]), "test acc=",                     "{:.9f}".format(test_acc[i]))
+            print("Epoch: {} cost = {}".format(i, avg_cost_by_epoch[i]))
+            # print("Epoch:", '%04d' % (i+1), "cost=", "{:.9f}".format(avg_cost_by_epoch[i]), "train acc=",  "{:.9f}".format(train_acc[i]), "dev acc=",  "{:.9f}".format(dev_acc[i]), "test acc=",  "{:.9f}".format(test_acc[i]))
         if i > 1:
             diff = abs(avg_cost_by_epoch[i]-avg_cost_by_epoch[i-1])
             if diff <= stop:
                 break
-
-    # print('Check LSTM embedding...')
-    # new_idx = 0
-    # new_data = data_padded.loc[new_idx]
-    # new_X1 = new_data['q1w_embed_pad']
-    # new_X1 = new_X1.reshape(1, max_len_1, dim_embedded)
-    # new_X2 = new_data['q2w_embed_pad']
-    # new_X2 = new_X2.reshape(1, max_len_2, dim_embedded)
-    # new_label = np.array(new_data['is_duplicate'])
-    # new_y = np.zeros((1, n_labels))
-    # new_y[0, new_label] = 1
- 
-    # lstm_sent1, lstm_sent2 = sess.run([lS1, lS2],feed_dict={X1: new_X1, X2: new_X2, y: new_y, keep_prob: 1.0})
 
     #metrics
     y_p = tf.argmax(yp, 1)
